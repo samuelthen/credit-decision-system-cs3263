@@ -151,12 +151,6 @@ class CreditDecisionSystem:
             plt.tight_layout()
             plt.show()
 
-            # Also save the figure
-            filename = f"fairness_{model_name}_{attr}.png"
-            plt.savefig(filename)
-            print(f"✅ Fairness plot saved as: {filename}")
-            plt.close()
-
             # Print out the metric values
             for metric_set, title, _ in metrics:
                 print(f"\n📌 {title}")
@@ -189,7 +183,7 @@ class CreditDecisionSystem:
             print(f"\nTraining RL agent for {context} context...")
             
             # Generate synthetic data for this context
-            n_samples = 2000
+            n_samples = 1000
             synthetic_data = self.generator.generate_applicants(n_samples, context)
             
             # Extract features and labels
@@ -201,14 +195,13 @@ class CreditDecisionSystem:
             
             # Train RL agent
             best_threshold = self.rl_optimizer.train(
-                X_synthetic, y_synthetic, risk_scores, context, n_episodes=1000)
+                X_synthetic, y_synthetic, risk_scores, context, n_episodes=500)
             
             print(f"✅ Optimal threshold for {context} context: {best_threshold:.2f}")
         
         # Visualize training results
         self.rl_optimizer.visualize_training()
-        plt.savefig("rl_training_results.png")
-        plt.close()
+        plt.show()
     
     def make_decision(self, applicant, economic_context_query=None):
         """
@@ -288,36 +281,10 @@ class CreditDecisionSystem:
         plt.legend(loc="lower right")
         plt.grid(True)
         
-        plt.savefig("model_performance_roc.png")
-        plt.close()
+        plt.show()
         
-        return "model_performance_roc.png"
     
-    def visualize_context_thresholds(self):
-        """Visualize optimal thresholds by economic context"""
-        contexts = ["bleak", "neutral", "positive"]
-        thresholds = [self.rl_optimizer.get_optimal_threshold(ctx) for ctx in contexts]
-        
-        plt.figure(figsize=(10, 6))
-        bars = plt.bar(contexts, thresholds, color=['#FF6B6B', '#4ECDC4', '#56B870'])
-        
-        plt.title("Optimal Decision Thresholds by Economic Context")
-        plt.xlabel("Economic Context")
-        plt.ylabel("Risk Score Threshold")
-        plt.ylim(0.5, 0.8)
-        
-        # Add value labels
-        for bar in bars:
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                    f'{height:.2f}', ha='center', va='bottom')
-        
-        plt.grid(axis='y', linestyle='--', alpha=0.7)
-        plt.savefig("context_thresholds.png")
-        plt.close()
-        
-        return "context_thresholds.png"
-        
+
     def explain_model_behaviors(self, top_n=20):
         """Explain model behavior: top predictors for LR and one tree for RF"""
         print("\n🔎 Interpreting model behavior...")
@@ -343,7 +310,6 @@ class CreditDecisionSystem:
             sns.barplot(x="coefficient", y="feature", data=coef_df.head(top_n))
             plt.title("Top Predictors in Logistic Regression")
             plt.tight_layout()
-            plt.savefig("logreg_top_predictors.png")
             plt.show()
         else:
             print("⚠️ Logistic regression model not found.")
@@ -361,14 +327,37 @@ class CreditDecisionSystem:
                 feature_names=self.preprocessor.get_feature_names_out(),
                 filled=True,
                 rounded=True,
-                max_depth=5,
+                max_depth=3,
                 fontsize=9
             )
             plt.title("Random Forest - Tree 0 (max depth=3)")
-            plt.savefig("random_forest_tree.png")
             plt.show()
         else:
             print("⚠️ Random forest model not found.")
+    
+    def visualize_context_thresholds(self):
+        """Visualize optimal thresholds by economic context"""
+        contexts = ["bleak", "neutral", "positive"]
+        thresholds = [self.rl_optimizer.get_optimal_threshold(ctx) for ctx in contexts]
+        
+        plt.figure(figsize=(10, 6))
+        bars = plt.bar(contexts, thresholds, color=['#FF6B6B', '#4ECDC4', '#56B870'])
+        
+        plt.title("Optimal Decision Thresholds by Economic Context")
+        plt.xlabel("Economic Context")
+        plt.ylabel("Risk Score Threshold")
+        plt.ylim(0.5, 0.8)
+        
+        # Add value labels
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                    f'{height:.2f}', ha='center', va='bottom')
+        
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.show()
+        
+        
 
     def simulate_thresholds_over_time(self, total_steps=300, smoothing_alpha=0.1):
         """RL threshold adaptation vs fixed threshold (0.5) with full reward tracking across an economic cycle"""
@@ -469,7 +458,6 @@ class CreditDecisionSystem:
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-        plt.savefig("threshold_simulation_over_time.png")
         plt.show()
 
         # Plot 2: Cumulative Reward Comparison
@@ -483,7 +471,6 @@ class CreditDecisionSystem:
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-        plt.savefig("cumulative_reward_comparison.png")
         plt.show()
 
         # Print Summary
@@ -491,7 +478,6 @@ class CreditDecisionSystem:
         print(f"📈 RL Final Cumulative Reward (Single Q): {single_cumulative[-1]:.2f}")
         print(f"📈 RL Final Cumulative Reward (Double Q): {double_cumulative[-1]:.2f}")
         print(f"📉 Fixed Threshold (0.5) Reward: {fixed_cumulative[-1]:.2f}")
-        print("📊 Plots saved: threshold_simulation_over_time.png, cumulative_reward_comparison.png")
     
     
     def tune_all_agents(self, context="neutral", n_trials=10, search_type="random", n_samples=2000):
@@ -750,7 +736,6 @@ class CreditDecisionSystem:
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-        plt.savefig("compare_thresholds_tuned.png")
         plt.show()
 
         # Plot 2: Cumulative Rewards
@@ -766,7 +751,6 @@ class CreditDecisionSystem:
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-        plt.savefig("compare_cumulative_rewards_tuned.png")
         plt.show()
 
         return {

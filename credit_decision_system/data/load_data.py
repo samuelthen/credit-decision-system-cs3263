@@ -146,3 +146,5 @@ def prepare_data_splits(X, y, test_size=0.1):
     # Identify column types
     categorical_cols = X.select_dtypes(include="object").columns.tolist()
     numerical_cols = X.select_dtypes(exclude="object").columns.tolist()
+
+    return X_train, X_test, y_train, y_test, categorical_cols, numerical_cols
