@@ -1,4 +1,5 @@
 from ucimlrepo import fetch_ucirepo
+from sklearn.model_selection import train_test_split
 
 def load_german_credit_data():
     """Load and preprocess the German Credit dataset"""
@@ -135,3 +136,13 @@ def load_german_credit_data():
     protected_attributes = ["personal_status_sex", "age", "foreign_worker"]
     
     return X, y, protected_attributes
+
+def prepare_data_splits(X, y, test_size=0.1):
+    """Split data into train and test sets"""
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42, stratify=y
+    )
+    
+    # Identify column types
+    categorical_cols = X.select_dtypes(include="object").columns.tolist()
+    numerical_cols = X.select_dtypes(exclude="object").columns.tolist()
