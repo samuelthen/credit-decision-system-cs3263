@@ -5,30 +5,28 @@ class ContextAwarenessGate:
     """
     Context Awareness Gate (CAG) for Retrieval-Augmented Generation (RAG) systems.
 
-    Purpose:
-    This gate determines whether a given user query requires external retrieval
-    (e.g., from a document store or knowledge base) before answering.
+    This module implements the Vector Candidates (VC) algorithm as described by Heydari et al. (2025),
+    to decide whether an external retrieval step is necessary for a given user query.
 
-    CAG uses a hybrid approach:
-    - Statistical decision using cosine similarity between the query and pseudo-document embeddings.
-    - Optional override via an LLM-based yes/no classification signal.
+    It combines:
+    - Statistical scoring based on cosine similarity between the query and pre-encoded pseudo-documents.
+    - An optional override mechanism using a language model (LLM) for ambiguous or edge cases.
 
-    This mechanism improves computational efficiency and reduces hallucination risks
-    by skipping unnecessary retrievals for simple/general queries.
+    The CAG improves answer quality, efficiency, and reduces hallucinations by avoiding unnecessary retrievals.
     """
-    def __init__(self, embedder, documents, threshold=0.35, top_k=3, use_llm_signal=False, llm_client=None,
-                 debug=False):
+
+    def __init__(self, embedder, documents, threshold=0.35, top_k=3, use_llm_signal=False, llm_client=None, debug=False):
         """
-        Initialize the Context Awareness Gate.
+        Initialize the Context Awareness Gate with document embeddings and decision logic.
 
         Args:
-        embedder: Sentence transformer model used for embedding queries and documents.
-        documents: A dictionary of labeled context documents (e.g., { 'bleak': [...], 'neutral': [...], ... }).
-        threshold: Cosine similarity threshold above which retrieval is triggered.
-        top_k: Number of top similarities to average for decision-making.
-        use_llm_signal: Whether to use an LLM to provide a semantic override signal.
-        llm_client: LLM API client (e.g., OpenAI client) to invoke for decision-making if enabled.
-        debug: If True, prints internal decision logic for transparency and tuning.
+            embedder: Pretrained sentence transformer used to encode queries and documents.
+            documents: A dictionary of context-labeled documents, e.g. { 'bleak': [...], 'neutral': [...], ... }.
+            threshold: Decision threshold for cosine similarity (used as a confidence score).
+            top_k: Number of top matching documents used in the average similarity score.
+            use_llm_signal: If True, queries are additionally evaluated using a semantic signal from an LLM.
+            llm_client: Optional LLM API client used for yes/no retrieval override.
+            debug: If True, prints internal similarity scores and decisions for transparency and tuning.
         """
         self.embedder = embedder
         self.threshold = threshold
@@ -37,61 +35,77 @@ class ContextAwarenessGate:
         self.llm_client = llm_client
         self.debug = debug
 
-        # Step 1: Flatten all provided context documents into a list
+        # Flatten all documents across context categories
         self.doc_texts = []
         for doc_list in documents.values():
             self.doc_texts.extend(doc_list)
 
-        # Step 2: Embed all pseudo-documents for similarity comparison
+        # Precompute embeddings for pseudo-documents
         self.doc_embeddings = self.embedder.encode(self.doc_texts, convert_to_numpy=True)
 
     def should_retrieve(self, query):
         """
-        Main method to determine whether to perform external retrieval for a given query.
-        Uses cosine similarity between the query and pseudo-docs, along with optional LLM override.
+        Determine whether a query should trigger external document retrieval.
+
+        The decision is based on:
+        - Cosine similarity between the query and precomputed document embeddings
+        - Average similarity of the Top-K most relevant pseudo-documents
+        - Optional override from a semantic LLM classification
 
         Args:
-            query (str): The user's input query.
+            query (str): The input user query.
+
         Returns:
-            bool: True if retrieval should be triggered, False if the LLM or local knowledge is sufficient.
+            bool: True if retrieval should be triggered, False if the system can answer without it.
         """
-        # Embed the user query
+        # Embed the incoming query
         query_embedding = self.embedder.encode([query], convert_to_numpy=True)
 
-        # Compute cosine similarities with all document embeddings
+        # Compute similarity between query and each pseudo-document
         similarities = cosine_similarity(query_embedding, self.doc_embeddings)[0]
 
-        # Take average of top-K most similar documents
+        # Aggregate Top-K most relevant similarities
         top_k_similarities = sorted(similarities, reverse=True)[:self.top_k]
         avg_top_k = np.mean(top_k_similarities)
 
-        # Debug logging for analysis and tuning
+        # Normalize similarity to get a confidence score [0.0, 1.0]
+        confidence_score = float(np.clip(avg_top_k, 0.0, 1.0))
+
+        # Print detailed debug output if enabled
         if self.debug:
             print(f"[CAG] Query: {query}")
             print(f"[CAG] Top-{self.top_k} avg similarity: {avg_top_k:.3f} (Threshold: {self.threshold})")
+            print(f"[CAG] Confidence score: {confidence_score:.3f}")
 
-        # Initial decision based on statistical similarity
-        decision = avg_top_k > self.threshold
+        # Base decision: retrieve only if confidence exceeds the defined threshold
+        decision = confidence_score > self.threshold
 
-        # LLM answers the query if needed
+        # Optionally ask the LLM to override the statistical decision
         if self.use_llm_signal and self.llm_client:
             llm_decision = self.query_llm_for_signal(query)
-            decision = decision or llm_decision # Combine both logic paths
-            if self.debug:
+            if llm_decision and not decision:
+                # Boost the confidence to slightly above threshold to force retrieval
+                confidence = self.threshold + 0.05
+                decision = True
+                if self.debug:
+                    print(f"[CAG] LLM override activated. Boosted confidence to {confidence:.3f}")
+            elif self.debug:
                 print(f"[CAG] LLM decision: {llm_decision}")
 
         return decision
 
     def query_llm_for_signal(self, query):
         """
-        Ask the LLM whether this query requires document retrieval.
-        This semantic override complements the cosine similarity logic and helps in edge cases.
+        Ask a language model if external retrieval is needed to answer the query.
+
+        The LLM is prompted with a yes/no question and can override the statistical decision,
+        especially for semantic nuance that is not captured by embedding similarity.
 
         Args:
-            query (str): The user's input query.
+            query (str): The user's natural language query.
 
         Returns:
-            bool: True if LLM determines retrieval is needed, otherwise False.
+            bool: True if the LLM recommends performing retrieval, otherwise False.
         """
         try:
             prompt = f"""
@@ -100,7 +114,7 @@ class ContextAwarenessGate:
             Return "yes" or "no" only.
             """
 
-            # Call LLM to get a "yes" or "no" answer
+            # Perform an API call to the LLM (gpt-4o-mini) to get a yes/no answer
             response = self.llm_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt.strip()}],
@@ -112,4 +126,4 @@ class ContextAwarenessGate:
 
         except Exception as e:
             print(f"⚠️ LLM signal error: {e}")
-            return False # Assume retrieval is not needed
+            return False  # assume retrieval not required

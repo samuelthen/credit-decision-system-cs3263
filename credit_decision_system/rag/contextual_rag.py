@@ -8,10 +8,26 @@ import json
 
 class ContextualRAG:
     """
-    Retrieval-Augmented Generation system with Context Awareness Gate (CAG)
-    to enhance efficiency and avoid unnecessary retrievals.
+    Retrieval-Augmented Generation (RAG) system for economic context classification.
+
+    This implementation integrates the Context Awareness Gate (CAG) using the Vector Candidates (VC) algorithm,
+    which allows the system to decide whether retrieval of external economic context is necessary
+    before querying a large language model (LLM).
+
+    The system combines:
+        - Efficient retrieval from a domain-specific FAISS vector index
+        - Rule-based or LLM-based classification logic
+        - Dynamic query routing via CAG for optimized performance and relevance
     """
     def __init__(self, use_llm=True, client=None, NLP_AVAILABLE=True):
+        """
+        Initialize the ContextualRAG pipeline.
+
+        Args:
+            use_llm (bool): Whether to enable LLM for reasoning and classification.
+            client: LLM API client (e.g., OpenAI's GPT) for inference if enabled.
+            NLP_AVAILABLE (bool): Flag to enable fallback if embedding model fails or is unavailable.
+        """
         self.use_llm = use_llm and client is not None
         self.client = client
         self.documents = self._load_documents()
@@ -54,6 +70,13 @@ class ContextualRAG:
             print("⚠️ NLP not available. Falling back to rule-based classification.")
 
     def _load_documents(self):
+        """
+        Load predefined macroeconomic context documents grouped by classification label.
+
+        Returns:
+            dict: A dictionary where keys are labels (e.g., "bleak", "neutral", "positive")
+                  and values are lists of short economic indicators or reports.
+        """
         return {
             "bleak": [
                 "Singapore's tech industry is facing headwinds with over 5,000 layoffs reported in Q2 alone.",
@@ -94,22 +117,47 @@ class ContextualRAG:
         }
 
     def retrieve_context(self, query, top_k=3):
-        """Retrieve documents most relevant to query"""
+        """
+        Retrieve the most relevant economic context documents for a given query.
+
+        Uses vector similarity search over pre-embedded documents and selects documents
+        based on majority label voting from Top-K nearest neighbors.
+
+        Args:
+             query (str): The user's natural language query.
+             top_k (int): Number of nearest neighbors to retrieve from the FAISS index.
+
+        Returns:
+             tuple: (List of selected documents, Majority context label)
+        """
+        # Optionally enrich the query with related terms (not used in embedding here)
         expanded_query = f"{query} Related terms: market, finance, investment, tech, economy"
         query_embedding = self.embedder.encode([query], convert_to_numpy=True)
         distances, indices = self.index.search(query_embedding, top_k)
 
+        # Determine which context label is most represented among the top documents
         retrieved_contexts = [self.contexts[i] for i in indices[0]]
         context_counts = {ctx: retrieved_contexts.count(ctx) for ctx in set(retrieved_contexts)}
         majority_context = max(context_counts, key=context_counts.get)
 
+        # Return documents from the winning context label
         result_docs = [self.documents[majority_context][i % len(self.documents[majority_context])]
                        for i, ctx in enumerate(retrieved_contexts) if ctx == majority_context]
 
         return result_docs, majority_context
 
     def classify_context_with_llm(self, query):
-        """Use LLM to classify economic context based on retrieved documents"""
+        """
+        Classify the economic outlook using an LLM, based on documents retrieved from FAISS.
+
+        This is triggered only if CAG determines that retrieval is necessary.
+
+        Args:
+             query (str): The user's natural language query.
+
+        Returns:
+              tuple: (classification label, rationale string)
+        """
         if not self.use_llm:
             return self.classify_context_rule_based(query)
 
@@ -117,6 +165,7 @@ class ContextualRAG:
             retrieved_docs, majority_context = self.retrieve_context(query)
             context = "\n".join(retrieved_docs)
 
+            # Construct prompt for LLM-based classification
             prompt = f"""
             You are a credit policy assistant. Based on the following macroeconomic context, 
             classify the economic outlook as one of: "bleak", "neutral", or "positive".
@@ -150,7 +199,19 @@ class ContextualRAG:
             return self.classify_context_rule_based(query)
 
     def classify_context_rule_based(self, query):
-        """Fallback classification based on simple keyword rules"""
+        """
+        Fallback context classification using keyword-based heuristic.
+
+        This is used if:
+            - Retrieval is not required (per CAG)
+            - LLM is unavailable or fails
+
+        Args:
+             query (str): The user's input query.
+
+        Returns:
+            tuple: (classification label, rationale string)
+        """
         bleak_keywords = ["recession", "layoffs", "downturn", "crisis", "decline", "collapse"]
         positive_keywords = ["growth", "boom", "thriving", "expansion", "upward", "prosperity"]
 
@@ -188,7 +249,7 @@ class ContextualRAG:
                 'timestamp': ISO timestamp of classification decision
             }
         """
-        # Step 1: Check with Context Awareness Gate if retrieval is necessary
+        # Check with Context Awareness Gate if retrieval is necessary
         if hasattr(self, "cag") and not self.cag.should_retrieve(query):
             context, reason = self.classify_context_rule_based(query)
             return {
@@ -197,8 +258,7 @@ class ContextualRAG:
                 "timestamp": datetime.now().isoformat()
             }
 
-        # Step 2: Retrieval is required
-        # If LLM is available, classify using retrieved context and LLM
+        # Retrieval is required and classify using LLM if available
         if self.use_llm:
             context, reason = self.classify_context_with_llm(query)
         else:
