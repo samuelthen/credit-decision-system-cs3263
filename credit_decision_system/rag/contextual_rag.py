@@ -272,8 +272,7 @@ class ContextualRAG:
         This function intelligently routes the decision flow:
         1. Uses the Context Awareness Gate (CAG) to decide if retrieval is needed.
         2. If retrieval is unnecessary, uses a rule-based fallback.
-        3. If retrieval is needed and LLM is available, invokes prompt-driven LLM classification.
-        4. If LLM is unavailable or fails, falls back to rules.
+        3. If retrieval is needed, invoke prompt-driven LLM classification.
 
         Args:
             applicant_profile (dict): Structured profile with applicant features such as:
