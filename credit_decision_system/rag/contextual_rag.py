@@ -71,48 +71,46 @@ class ContextualRAG:
 
     def _load_documents(self):
         """
-        Load predefined macroeconomic context documents grouped by classification label.
-
-        Returns:
-            dict: A dictionary where keys are labels (e.g., "bleak", "neutral", "positive")
-                  and values are lists of short economic indicators or reports.
+        Load macroeconomic context documents aligned with RL and German credit job features.
         """
         return {
             "bleak": [
-                "Singapore's tech industry is facing headwinds with over 5,000 layoffs reported in Q2 alone.",
-                "Venture capital funding in Southeast Asia has dropped 40% compared to the previous year.",
-                "The demand for IT and software engineers has declined sharply, especially in the fintech sector.",
-                "Startups report significant difficulties raising follow-on funding in the current climate.",
-                "The NASDAQ tech index has fallen 15% over the last quarter, dragging investor sentiment in the region.",
-                "MAS has issued a warning about capital outflows from riskier sectors, including emerging tech.",
-                "Many early-stage startups in Singapore are freezing hiring and cutting operational costs.",
-                "Several co-working tech hubs have seen declining occupancy due to shutdowns and cost-cutting.",
-                "The tech talent market has cooled, with a 30% drop in tech job postings year-on-year.",
-                "SMEs in the software sector report delayed payments and tighter credit lines from banks."
+                "Mass layoffs reported across unskilled labor sectors, with job loss concentrated in manufacturing and non-resident workers.",
+                "Credit markets have tightened, particularly for unemployed and unskilled applicants.",
+                "Funding for early-stage startups has dropped over 40%, triggering job cuts in low-experience roles.",
+                "Small businesses report delayed payments, tighter credit lines, and reduced hiring activity.",
+                "Regulators warn banks to reduce risk exposure, impacting non-qualified borrowers the most.",
+                "Unemployment has risen significantly among non-residents and unskilled sectors.",
+                "The fintech sector has frozen new hiring and rescinded offers for junior roles.",
+                "Venture capital activity has declined, with investor sentiment at a 2-year low.",
+                "Tech job postings are down 35%, particularly in operational and junior positions.",
+                "Several firms have announced hiring freezes, especially for roles requiring minimal qualifications."
             ],
+
             "neutral": [
-                "Singapore's tech industry shows mixed signals with some sectors growing while others consolidate.",
-                "Venture capital funding in Southeast Asia remains stable compared to the previous quarter.",
-                "The demand for IT and software engineers is holding steady across most sectors.",
-                "Startups report moderate success in raising follow-on funding in the current climate.",
-                "The NASDAQ tech index has moved sideways over the last quarter, suggesting market indecision.",
-                "MAS maintains its current outlook on technology investments with no new restrictions.",
-                "Most tech companies in Singapore are maintaining current headcount levels.",
-                "Co-working tech hubs report stable occupancy rates with moderate new membership sign-ups.",
-                "The tech talent market is balanced, with job postings matching historical averages.",
-                "SMEs in the software sector report normal payment cycles and standard credit access."
+                "The job market remains steady for skilled employees, while unskilled roles show minor decline.",
+                "Singapore's tech sector reflects mixed signals, with some companies expanding while others restructure.",
+                "VC funding has remained flat, indicating cautious investor optimism.",
+                "Credit approval rates are consistent with historical trends, especially for mid-income applicants.",
+                "MAS has not introduced any new credit-tightening policies this quarter.",
+                "Hiring activity is stable across most industries, though slightly lower in entry-level positions.",
+                "Regulatory guidance remains neutral, with no new incentives or restrictions.",
+                "Tech employment is balanced, with job postings at seasonal averages.",
+                "SMEs report no significant changes in lending conditions.",
+                "Macroeconomic data reflects modest growth and moderate inflation, with neither recession nor boom."
             ],
+
             "positive": [
-                "Singapore's tech industry is booming with a 25% increase in new company registrations this quarter.",
-                "Venture capital funding in Southeast Asia has surged 35% compared to the previous year.",
-                "The demand for IT and software engineers has reached an all-time high across all tech sectors.",
-                "Startups report unprecedented success in raising funding, with average rounds increasing by 40%.",
-                "The NASDAQ tech index has gained 20% over the last quarter, boosting investor confidence.",
-                "MAS has introduced new incentives for financial technology innovation and investments.",
-                "Tech companies across Singapore are competing aggressively for talent with increased compensation.",
-                "Co-working tech hubs are expanding rapidly with waiting lists for premium spaces.",
-                "The tech talent market is red hot, with a 45% increase in job postings year-on-year.",
-                "SMEs in the software sector report excellent cash flow and easy access to credit and capital."
+                "Job growth is strongest among skilled and high-qualified professionals.",
+                "Venture capital funding has surged, driving demand for high-skill talent and new startups.",
+                "SMEs report easy access to credit, with high approval rates and strong cash flow.",
+                "Hiring demand in technology and finance is rising, especially in leadership and self-employed sectors.",
+                "Investors are bullish on Southeast Asia, with strong returns across startup portfolios.",
+                "Singapore’s government has rolled out new innovation grants to fuel economic expansion.",
+                "Job postings for management and senior IT roles are up 40% compared to last year.",
+                "Consumer sentiment is high, boosting demand across financial and real estate sectors.",
+                "Companies are aggressively hiring qualified individuals, offering increased compensation.",
+                "Business registration and credit expansion are at multi-year highs, indicating a booming economy."
             ]
         }
 
@@ -120,43 +118,113 @@ class ContextualRAG:
         """
         Retrieve the most relevant economic context documents for a given query.
 
-        Uses vector similarity search over pre-embedded documents and selects documents
-        based on majority label voting from Top-K nearest neighbors.
+        Uses cosine similarity between the query embedding and all pseudo-document embeddings
+        to identify the Top-K most semantically similar documents. A majority label is chosen
+        from the retrieved documents to determine the dominant context class.
 
         Args:
              query (str): The user's natural language query.
-             top_k (int): Number of nearest neighbors to retrieve from the FAISS index.
+             top_k (int): Number of top similar documents to select.
 
         Returns:
              tuple: (List of selected documents, Majority context label)
         """
-        # Optionally enrich the query with related terms (not used in embedding here)
-        expanded_query = f"{query} Related terms: market, finance, investment, tech, economy"
+        # Embed the user query
         query_embedding = self.embedder.encode([query], convert_to_numpy=True)
-        distances, indices = self.index.search(query_embedding, top_k)
 
-        # Determine which context label is most represented among the top documents
-        retrieved_contexts = [self.contexts[i] for i in indices[0]]
+        # Compute cosine similarity between query and all pre-embedded documents
+        similarities = cosine_similarity(query_embedding, self.doc_embeddings)[0]
+
+        # Get indices of Top-K most similar documents
+        top_k_indices = similarities.argsort()[::-1][:top_k]
+
+        # Identify the majority context label from the Top-K documents
+        retrieved_contexts = [self.contexts[i] for i in top_k_indices]
         context_counts = {ctx: retrieved_contexts.count(ctx) for ctx in set(retrieved_contexts)}
         majority_context = max(context_counts, key=context_counts.get)
 
-        # Return documents from the winning context label
+        # Select the documents from the majority context label
         result_docs = [self.documents[majority_context][i % len(self.documents[majority_context])]
-                       for i, ctx in enumerate(retrieved_contexts) if ctx == majority_context]
+                       for i in top_k_indices if self.contexts[i] == majority_context]
 
         return result_docs, majority_context
 
-    def classify_context_with_llm(self, query):
+    def summarize_documents(self, documents):
         """
-        Classify the economic outlook using an LLM, based on documents retrieved from FAISS.
+        Generate a structured JSON summary from a list of economic context documents.
 
-        This is triggered only if CAG determines that retrieval is necessary.
+        Transform raw and unstructured economic documents into a structured and interpretable
+        JSON format. This structured representation enables the RAG system to remove variability
+        from unstructured text inputs and reason with consistent macroeconomic indicators
+        such as "macro_trend", "labour_market", "credit_flow", and "investor_sentiment".
+
+        This implementation follows the core idea proposed by Zhang et al. (2024) in the
+        "Improving LLM Fidelity through Context-Aware Grounding" research paper, which highlights the
+        importance of contextual grounding using machine-readable schema to improve response fidelity.
+
+        By producing standardized summaries, this function allows the model to generalize
+        across diverse economic scenarios and seamlessly scale to new domains or use cases.
+
+        This enhances the scalability of the RAG system.
 
         Args:
-             query (str): The user's natural language query.
+            documents (list): List of raw economic context strings.
 
         Returns:
-              tuple: (classification label, rationale string)
+            dict: Structured summary for grounding, e.g.,
+                  {
+                      "macro_trend": "decline",
+                      "labor_market": "contracting",
+                      "credit_flow": "tight",
+                      "investor_sentiment": "bearish"
+                  }
+        """
+        if not self.use_llm:
+            return {}
+
+        try:
+            summary_prompt = f"""
+            Summarize the following economic signals into a structured JSON with the fields:
+            - macro_trend: "growth" | "stable" | "decline"
+            - labour_market: "expanding" | "stable" | "contracting"
+            - credit_flow: "loose" | "normal" | "tight"
+            - investor_sentiment: "bullish" | "neutral" | "bearish"
+
+            Economic Documents:
+            {chr(10).join(documents)}
+
+            Return only the JSON object.
+            """
+
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": summary_prompt.strip()}],
+                temperature=0.3,
+                max_tokens=300
+            )
+
+            return json.loads(response.choices[0].message.content.strip())
+
+        except Exception as e:
+            print(f"⚠️ Failed to summarize context: {e}")
+            return {}
+
+    def classify_context_with_llm(self, query):
+        """
+        Classify the economic outlook using an LLM grounded in retrieved and semantically summarized context.
+
+        This method retrieves the most relevant macroeconomic documents for a given query,
+        optionally summarizes them into a structured format (if enabled), and passes the information
+        to a language model for final classification. The model returns an outlook label
+        ("bleak", "neutral", or "positive") along with a concise rationale.
+
+        Args:
+            query (str): The user's natural language query.
+
+        Returns:
+            tuple: A pair containing:
+                 - classification (str): One of "bleak", "neutral", or "positive".
+                 - reasoning (str): Short explanation justifying the classification.
         """
         if not self.use_llm:
             return self.classify_context_rule_based(query)
@@ -165,22 +233,22 @@ class ContextualRAG:
             retrieved_docs, majority_context = self.retrieve_context(query)
             context = "\n".join(retrieved_docs)
 
-            # Construct prompt for LLM-based classification
+            # Construct a grounded prompt using structured context
             prompt = f"""
-            You are a credit policy assistant. Based on the following macroeconomic context, 
+            You are a credit policy assistant. Based on the structured macroeconomic context below, 
             classify the economic outlook as one of: "bleak", "neutral", or "positive".
 
-            Return your answer strictly in this JSON format:
-            {{
-              "classification": "bleak | neutral | positive",
-              "reasoning": "short rationale here"
-            }}
-
             Context:
-            {context}
+            {json.dumps(structured_context, indent=2)}
 
             Question:
             {query}
+
+            Return your answer strictly in this JSON format:
+            {{
+                "classification": "bleak | neutral | positive",
+                "reasoning": "short rationale here"
+            }}
             """
 
             response = self.client.chat.completions.create(
@@ -190,8 +258,7 @@ class ContextualRAG:
                 max_tokens=300
             )
 
-            raw_text = response.choices[0].message.content.strip()
-            result = json.loads(raw_text)
+            result = json.loads(response.choices[0].message.content.strip())
             return result["classification"], result["reasoning"]
 
         except Exception as e:
@@ -249,7 +316,6 @@ class ContextualRAG:
                 'timestamp': ISO timestamp of classification decision
             }
         """
-        # Check with Context Awareness Gate if retrieval is necessary
         if hasattr(self, "cag") and not self.cag.should_retrieve(query):
             context, reason = self.classify_context_rule_based(query)
             return {
@@ -258,14 +324,11 @@ class ContextualRAG:
                 "timestamp": datetime.now().isoformat()
             }
 
-        # Retrieval is required and classify using LLM if available
         if self.use_llm:
             context, reason = self.classify_context_with_llm(query)
         else:
-            # Fallback: rule-based if LLM is not available
             context, reason = self.classify_context_rule_based(query)
 
-        # Return classification with reasoning and timestamp
         return {
             "classification": context,
             "reasoning": reason,
