@@ -116,22 +116,39 @@ class ContextualRAG:
             ]
         }
 
-    def retrieve_context(self, query, top_k=3):
+    def retrieve_context(self, applicant_profile, top_k=3):
         """
-        Retrieve the most relevant economic context documents for a given query.
+        Retrieve economic and policy context relevant to a specific applicant profile.
 
-        Uses vector similarity search over pre-embedded documents and selects documents
-        based on majority label voting from Top-K nearest neighbors.
+        The method constructs a dynamic, context-aware query using applicant attributes
+        such as loan type, industry, credit history, and current quarter. This query is
+        embedded and used to retrieve the most semantically similar documents via FAISS.
 
         Args:
-             query (str): The user's natural language query.
-             top_k (int): Number of nearest neighbors to retrieve from the FAISS index.
+            applicant_profile (dict): Structured data containing applicant-specific features. Example:
+                {
+                    "industry": "hospitality",
+                    "loan_type": "SME",
+                    "credit_history": "limited",
+                    "location": "Singapore",
+                    "current_quarter": "Q2 2025"
+                }
+            top_k (int): Number of top similar documents to retrieve.
 
         Returns:
-             tuple: (List of selected documents, Majority context label)
+            tuple:
+                - result_docs (list[str]): List of context-relevant document snippets.
+                - majority_context (str): Dominant label among retrieved documents (e.g., 'bleak', 'positive').
+                - query (str): The dynamically generated context-aware query string.
         """
-        # Optionally enrich the query with related terms (not used in embedding here)
-        expanded_query = f"{query} Related terms: market, finance, investment, tech, economy"
+        # Construct context-aware query using applicant profile
+        query = (
+            f"macroeconomic and regulatory impact of {applicant_profile.get('loan_type', '')} "
+            f"loans in {applicant_profile.get('current_quarter', '')}, "
+            f"{applicant_profile.get('industry', '')} sector, "
+            f"with {applicant_profile.get('credit_history', '')} credit history"
+        )
+
         query_embedding = self.embedder.encode([query], convert_to_numpy=True)
         distances, indices = self.index.search(query_embedding, top_k)
 
@@ -144,43 +161,48 @@ class ContextualRAG:
         result_docs = [self.documents[majority_context][i % len(self.documents[majority_context])]
                        for i, ctx in enumerate(retrieved_contexts) if ctx == majority_context]
 
-        return result_docs, majority_context
+        return result_docs, majority_context, query
 
-    def classify_context_with_llm(self, query):
+    def classify_context_with_llm(self, applicant_profile):
         """
-        Classify the economic outlook using an LLM, based on documents retrieved from FAISS.
+        Generate a risk classification using LLM, based on applicant profile + retrieved context.
 
-        This is triggered only if CAG determines that retrieval is necessary.
+        This method builds a tailored prompt combining macroeconomic documents and the
+        applicant’s structured profile. The prompt is sent to an LLM, which returns a
+        risk classification, rationale, and optional regulatory note.
 
         Args:
-             query (str): The user's natural language query.
+            applicant_profile (dict): Structured profile containing features relevant to credit decisioning.
 
         Returns:
-              tuple: (classification label, rationale string)
+            dict: {
+                "risk_classification": "low" | "medium" | "high",
+                "reasoning": "...",
+            }
         """
         if not self.use_llm:
             return self.classify_context_rule_based(query)
 
         try:
-            retrieved_docs, majority_context = self.retrieve_context(query)
+            retrieved_docs, majority_context, personalized_query = self.retrieve_context(applicant_profile)
             context = "\n".join(retrieved_docs)
 
-            # Construct prompt for LLM-based classification
+            # Generate a context-aware, applicant-specific prompt
             prompt = f"""
-            You are a credit policy assistant. Based on the following macroeconomic context, 
-            classify the economic outlook as one of: "bleak", "neutral", or "positive".
+            You are a credit policy AI assistant.
 
-            Return your answer strictly in this JSON format:
-            {{
-              "classification": "bleak | neutral | positive",
-              "reasoning": "short rationale here"
-            }}
-
+            Based on the following applicant profile and macroeconomic context, classify the risk outlook:
+            Profile: {json.dumps(applicant_profile, indent=2)}
+            
             Context:
             {context}
 
-            Question:
-            {query}
+            Provide your answer in this JSON format:
+            {{
+                "risk_classification": "low | medium | high",
+                "reasoning": "short justification",
+                "policy_consideration": "optional regulatory note if applicable"
+            }}
             """
 
             response = self.client.chat.completions.create(
@@ -190,84 +212,94 @@ class ContextualRAG:
                 max_tokens=300
             )
 
-            raw_text = response.choices[0].message.content.strip()
-            result = json.loads(raw_text)
-            return result["classification"], result["reasoning"]
+            return json.loads(response.choices[0].message.content.strip())
 
         except Exception as e:
             print(f"❌ LLM classification failed: {e}")
             return self.classify_context_rule_based(query)
 
-    def classify_context_rule_based(self, query):
+    def classify_context_rule_based(self, applicant_profile):
         """
-        Fallback context classification using keyword-based heuristic.
+        Fallback risk classifier using keyword-based heuristics on applicant profile.
 
-        This is used if:
-            - Retrieval is not required (per CAG)
-            - LLM is unavailable or fails
+        Used when:
+        - LLM is unavailable
+        - Retrieval is skipped by the Context Awareness Gate (CAG)
+
+        This performs a basic scan for economic sentiment keywords and applies a scoring heuristic.
 
         Args:
-             query (str): The user's input query.
-
-        Returns:
-            tuple: (classification label, rationale string)
-        """
-        bleak_keywords = ["recession", "layoffs", "downturn", "crisis", "decline", "collapse"]
-        positive_keywords = ["growth", "boom", "thriving", "expansion", "upward", "prosperity"]
-
-        query_lower = query.lower()
-        bleak_count = sum(word in query_lower for word in bleak_keywords)
-        positive_count = sum(word in query_lower for word in positive_keywords)
-
-        if bleak_count > positive_count:
-            return "bleak", "Based on negative economic indicators in query"
-        elif positive_count > bleak_count:
-            return "positive", "Based on positive economic indicators in query"
-        else:
-            return "neutral", "No strong indicators in either direction"
-
-    def get_context(self, query):
-        """
-        Main method for economic context classification, enhanced with Context Awareness Gate (CAG).
-
-        This function determines whether external document retrieval is necessary for the given query.
-        It does so using a hybrid approach:
-
-        1. Uses the Context Awareness Gate (CAG) to evaluate whether retrieval is needed, based on
-            query-document similarity and optional LLM signal.
-        2. If CAG decides retrieval is unnecessary, it falls back to a lightweight rule-based classifier.
-        3. If retrieval is needed and an LLM is available, it classifies context using retrieved documents + LLM.
-        4. If LLM is unavailable, it falls back to rule-based classification.
-
-        Args:
-            query (str): The user query about economic conditions.
+            applicant_profile (dict): Structured dictionary of applicant features.
 
         Returns:
             dict: {
-                'classification': One of "bleak", "neutral", or "positive",
-                'reasoning': Explanation of how the classification was determined,
-                'timestamp': ISO timestamp of classification decision
+                "risk_classification": "low" | "medium" | "high",
+                "reasoning": "...",
+                "policy_consideration": "..." (optional)
             }
         """
-        # Check with Context Awareness Gate if retrieval is necessary
-        if hasattr(self, "cag") and not self.cag.should_retrieve(query):
-            context, reason = self.classify_context_rule_based(query)
+        query = json.dumps(applicant_profile).lower()
+        bleak_keywords = ["recession", "inflation", "layoffs", "decline"]
+        positive_keywords = ["growth", "incentive", "relief", "expansion"]
+
+        query_lower = query.lower()
+        bleak_score = sum(word in query_lower for word in bleak_keywords)
+        positive_score = sum(word in query_lower for word in positive_keywords)
+
+        if bleak_score > positive_score:
             return {
-                "classification": context,
-                "reasoning": f"Query handled without retrieval – {reason}",
+                "risk_classification": "high",
+                "reasoning": "Negative indicators found in applicant context.",
+                "policy_consideration": "Recommend conservative lending approach."
+            }
+        elif positive_score > bleak_score:
+            return {
+                "risk_classification": "low",
+                "reasoning": "Positive market signals for applicant profile.",
+                "policy_consideration": ""
+            }
+        else:
+            return {
+                "risk_classification": "medium",
+                "reasoning": "Mixed or unclear signals in profile.",
+                "policy_consideration": ""
+            }
+
+    def get_applicant_context(self, applicant_profile):
+        """
+        Main method for context-aware credit assessment using the applicant profile.
+
+        This function intelligently routes the decision flow:
+        1. Uses the Context Awareness Gate (CAG) to decide if retrieval is needed.
+        2. If retrieval is unnecessary, uses a rule-based fallback.
+        3. If retrieval is needed, invoke prompt-driven LLM classification.
+
+        Args:
+            applicant_profile (dict): Structured profile with applicant features such as:
+                - loan_type
+                - industry
+                - credit_history
+                - location
+                - current_quarter
+
+        Returns:
+            dict: {
+                "risk_classification": "low" | "medium" | "high",
+                "reasoning": "...",
+                "policy_consideration": "...",
+                "timestamp": datetime string
+            }
+        """
+        query_str = f"{applicant_profile.get('loan_type', '')} in {applicant_profile.get('industry', '')}"
+
+        # Check with Context Awareness Gate if retrieval is necessary
+        if hasattr(self, "cag") and not self.cag.should_retrieve(query_str):
+            return {
+                **self.classify_context_rule_based(applicant_profile),
                 "timestamp": datetime.now().isoformat()
             }
 
-        # Retrieval is required and classify using LLM if available
-        if self.use_llm:
-            context, reason = self.classify_context_with_llm(query)
-        else:
-            # Fallback: rule-based if LLM is not available
-            context, reason = self.classify_context_rule_based(query)
-
-        # Return classification with reasoning and timestamp
-        return {
-            "classification": context,
-            "reasoning": reason,
-            "timestamp": datetime.now().isoformat()
-        }
+        # Retrieval is required and classify using LLM
+        result = self.classify_context_with_llm(applicant_profile)
+        result["timestamp"] = datetime.now().isoformat()
+        return result
