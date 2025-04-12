@@ -74,7 +74,7 @@ class ContextualRAG:
         Load predefined macroeconomic context documents grouped by classification label.
 
         Returns:
-            dict: A dictionary where keys are labels (e.g., "bleak", "neutral", "positive", "policy")
+            dict: A dictionary where keys are labels (e.g., "bleak", "neutral", "positive")
                   and values are lists of short economic indicators or reports.
         """
         return {
@@ -113,11 +113,6 @@ class ContextualRAG:
                 "Co-working tech hubs are expanding rapidly with waiting lists for premium spaces.",
                 "The tech talent market is red hot, with a 45% increase in job postings year-on-year.",
                 "SMEs in the software sector report excellent cash flow and easy access to credit and capital."
-            ],
-            "policy": [
-                "During inflationary periods, regulators advised stricter lending for high-risk borrowers.",
-                "Fair lending regulations require consistent handling of applicants with similar profiles.",
-                "COVID-era programs offered temporary leniency for self-employed and hospitality borrowers."
             ]
         }
 
@@ -183,7 +178,6 @@ class ContextualRAG:
             dict: {
                 "risk_classification": "low" | "medium" | "high",
                 "reasoning": "...",
-                "policy_consideration": "..." (optional)
             }
         """
         if not self.use_llm:
