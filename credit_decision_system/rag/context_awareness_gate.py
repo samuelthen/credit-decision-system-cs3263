@@ -14,6 +14,7 @@ class ContextAwarenessGate:
 
     The CAG improves answer quality, efficiency, and reduces hallucinations by avoiding unnecessary retrievals.
     """
+
     def __init__(self, embedder, documents, threshold=0.35, top_k=3, use_llm_signal=False, llm_client=None, debug=False):
         """
         Initialize the Context Awareness Gate with document embeddings and decision logic.
