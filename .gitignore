@@ -135,6 +135,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+cs3263env/
 
 # Spyder project settings
 .spyderproject
