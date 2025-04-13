@@ -1,5 +1,5 @@
 from sentence_transformers import SentenceTransformer
-from context_awareness_gate import ContextAwarenessGate
+from .context_awareness_gate import ContextAwarenessGate
 from datetime import datetime
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
@@ -19,7 +19,7 @@ class ContextualRAG:
         - Rule-based or LLM-based classification logic
         - Dynamic query routing via CAG for optimized performance and relevance
     """
-    def __init__(self, use_llm=True, client=None, NLP_AVAILABLE=True):
+    def __init__(self, use_llm=True, client=None, NLP_AVAILABLE=True, debug=False):
         """
         Initialize the ContextualRAG pipeline.
 
@@ -28,9 +28,12 @@ class ContextualRAG:
             client: LLM API client (e.g., OpenAI's GPT) for inference if enabled.
             NLP_AVAILABLE (bool): Flag to enable fallback if embedding model fails or is unavailable.
         """
+        self.debug = debug
+
         self.use_llm = use_llm and client is not None
         self.client = client
-        self.documents = self._load_documents()
+        self.documents = self._load_documents() 
+
 
         if NLP_AVAILABLE:
             try:
@@ -65,6 +68,9 @@ class ContextualRAG:
                 print("✅ ContextualRAG initialized with CAG")
             except Exception as e:
                 print(f"❌ Error initializing RAG: {e}")
+                if hasattr(self, "debug") and self.debug:
+                    import traceback
+                    traceback.print_exc()
                 self.use_llm = False
         else:
             print("⚠️ NLP not available. Falling back to rule-based classification.")

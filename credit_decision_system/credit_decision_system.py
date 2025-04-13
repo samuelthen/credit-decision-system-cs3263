@@ -5,7 +5,16 @@ from .report.llm_explainer import LLMExplainer
 from .data.synthetic_applicant_generator import SyntheticApplicantGenerator
 from .data.load_data import load_german_credit_data, prepare_data_splits
 from .base_models.base_model_builder import build_standard_models
+from .base_models.base_model_tuner import base_model_tuner
 from .base_models.fairness_evaluation import visualize_fairness_metrics
+from torch.utils.data import DataLoader
+from credit_decision_system.base_models.adversarial import (
+        extract_sensitive_attributes,
+        CreditDataset,
+        MainModel,
+        Adversary,
+        train_adversarial
+        )
 from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -16,13 +25,13 @@ from datetime import datetime
 class CreditDecisionSystem:
     """Main credit decisioning system combining all components"""
     
-    def __init__(self, use_llm=True, NLP_AVAILABLE=True):
+    def __init__(self, use_llm=True, NLP_AVAILABLE=True, use_adversarial=True):
         """Initialize the credit decision system"""
         self.use_llm = use_llm and NLP_AVAILABLE
-
+        self.use_adversarial = use_adversarial
         
         # Initialize components
-        self.rag = ContextualRAG(use_llm=use_llm)
+        self.rag = ContextualRAG(use_llm=use_llm, client=None, NLP_AVAILABLE=NLP_AVAILABLE, debug=False) # only had use llm at the start, no debug and other info
         self.rl_optimizer = RLThresholdOptimizer()
         self.double_q_optimizer = DoubleQThresholdOptimizer()
         self.explainer = LLMExplainer(use_llm=use_llm)
@@ -30,6 +39,7 @@ class CreditDecisionSystem:
         
         # Initialize models and data
         self.models = {}
+        self.adversary_model = None
         self.preprocessor = None
         self.protected_attributes = []
 
@@ -60,7 +70,25 @@ class CreditDecisionSystem:
         self.models = models
         self.preprocessor = preprocessor
         
-    
+    def tune_models(self, scoring="roc_auc", cv=5, n_iter=15, n_jobs=-1):
+        """
+        Tune all models using a two-stage search (randomized → grid), updates self.models.
+        """
+        print("\n🎯 Tuning all models using RandomizedSearchCV + GridSearchCV")
+        tuned_models, best_params = base_model_tuner(
+            models=self.models,
+            X_train=self.X_train,
+            y_train=self.y_train,
+            scoring=scoring,
+            cv=cv,
+            n_iter=n_iter,
+            n_jobs=n_jobs
+        )
+        self.models = tuned_models
+        self.tuned_model_params = best_params
+        return tuned_models, best_params
+
+
     def train_models(self):
         """Train all models"""
         print("Training standard models...")
@@ -162,6 +190,42 @@ class CreditDecisionSystem:
         self.fairness_metrics[model_name] = fairness_metrics
         return fairness_metrics
     
+    def train_adversarial_debiasing(self, num_epochs=20, batch_size=64):
+        """Train an adversarial debiasing model using gender or foreign_worker as sensitive attributes."""
+        print("\n🛡️ Training Adversarial Debiasing Model...")
+
+        # Step 1: Extract sensitive attributes
+        X_train_sensitive = extract_sensitive_attributes(self.X_train, self.X)
+        X_test_sensitive = extract_sensitive_attributes(self.X_test, self.X)
+
+        sensitive_attr_train = X_train_sensitive["is_female"]  # Or "is_foreign"
+        sensitive_attr_test = X_test_sensitive["is_female"]
+
+        # Step 2: Encode features
+        X_train_encoded = self.preprocessor.fit_transform(self.X_train)
+        X_test_encoded = self.preprocessor.transform(self.X_test)
+
+        # Step 3: Wrap in datasets
+        train_dataset = CreditDataset(X_train_encoded, self.y_train, sensitive_attr_train)
+        test_dataset = CreditDataset(X_test_encoded, self.y_test, sensitive_attr_test)
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size)
+
+        # Step 4: Init models
+        input_dim = X_train_encoded.shape[1]
+        main_model = MainModel(input_dim=input_dim)
+        adversary_model = Adversary(input_dim=64)
+
+        # Step 5: Train
+        train_adversarial(main_model, adversary_model, train_loader, num_epochs=num_epochs)
+
+        # Save for evaluation later
+        self.debiasing_model = main_model
+        self.adversary = adversary_model
+        self.test_loader_debiasing = test_loader
+
+    
     def prepare_rl_agent(self):
         """Prepare the RL agent with synthetic data for all contexts"""
         print("\nPreparing RL agent with synthetic data...")
@@ -242,8 +306,11 @@ class CreditDecisionSystem:
         decision = risk_score >= threshold  # True = reject, False = approve
         
         # 5. Generate explanation
+        # explanation = self.explainer.generate_explanation(
+            # applicant, risk_score, threshold, economic_context, decision)
         explanation = self.explainer.generate_explanation(
-            applicant, risk_score, threshold, economic_context, decision)
+            applicant.to_dict(), risk_score, threshold, economic_context, decision)
+
         
         # 6. Create decision record
         decision_record = {
@@ -294,8 +361,11 @@ class CreditDecisionSystem:
             logreg_model = self.models["logistic_regression"]
             # Extract named steps from pipeline
             clf = logreg_model.named_steps["classifier"]
-            feature_names = self.preprocessor.named_transformers_["cat"].get_feature_names_out(self.categorical_cols).tolist()
-            all_features = self.numerical_cols + feature_names
+            # feature_names = self.preprocessor.named_transformers_["cat"].get_feature_names_out(self.categorical_cols).tolist()
+            # all_features = self.numerical_cols + feature_names
+            preprocessor = logreg_model.named_steps["preprocess"]
+            cat_features = preprocessor.named_transformers_["cat"].get_feature_names_out(self.categorical_cols).tolist()
+            all_features = self.numerical_cols + cat_features
 
             print("\n📊 Top Predictors in Logistic Regression:")
             coef_df = pd.DataFrame({
