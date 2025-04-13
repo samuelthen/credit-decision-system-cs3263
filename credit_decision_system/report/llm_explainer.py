@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 @dataclass
 class ExplanationMetrics:
-    """Metrics to track explanation quality and performance"""
+    """Metrics to track explanation quality and performance."""
     generation_time: float
     explanation_length: int
     confidence_score: Optional[float] = None
@@ -17,9 +17,16 @@ class LLMExplainer:
     Generate human-readable explanations for credit decisions.
     
     This class provides both LLM-based and rule-based explanations. The LLM explanation uses an external
-    client (for example, an LLM API client) to generate explanations from a natural language prompt.
+    client (e.g., an LLM API client) to generate explanations from a natural language prompt.
     When the LLM is not available, a deterministic, rule-based explanation is returned to ensure
     consistent interpretability and fairness.
+    
+    Academic Integration:
+    Inspired by recent research in explainable AI, such as "LLMs for Explainable AI: A Comprehensive Survey"
+    (Bilal et al., 2025), the prompt for LLM-based explanations now incorporates academic insights. These
+    insights emphasize the integration of post-hoc analyses, intrinsic interpretability, and human-centered
+    narrative approaches. The explanation is guided to reflect clarity, factual accuracy, logical coherence,
+    and robustness, evaluated via measures of comprehensibility, faithfulness, and plausibility.
     """
     
     def __init__(self, use_llm=True, client=None, NLP_AVAILABLE=True, cache_duration_hours=24):
@@ -39,8 +46,8 @@ class LLMExplainer:
         self._last_cache_cleanup = datetime.now()
     
     def _validate_inputs(self, applicant_data: Dict, risk_score: float, threshold: float, 
-                        context: str, decision: bool) -> None:
-        """Validate input parameters for explanation generation"""
+                         context: str, decision: bool) -> None:
+        """Validate input parameters for explanation generation."""
         if not isinstance(applicant_data, dict):
             raise ValueError("applicant_data must be a dictionary")
         if not isinstance(risk_score, (int, float)):
@@ -59,8 +66,8 @@ class LLMExplainer:
             raise ValueError("threshold must be between 0 and 1")
     
     def _get_cache_key(self, applicant_data: Dict, risk_score: float, threshold: float, 
-                      context: str, decision: bool) -> str:
-        """Generate a unique cache key for the input parameters"""
+                       context: str, decision: bool) -> str:
+        """Generate a unique cache key for the input parameters."""
         input_str = json.dumps({
             'applicant_data': applicant_data,
             'risk_score': risk_score,
@@ -71,7 +78,7 @@ class LLMExplainer:
         return hashlib.md5(input_str.encode()).hexdigest()
     
     def _cleanup_cache(self) -> None:
-        """Remove expired cache entries"""
+        """Remove expired cache entries."""
         current_time = datetime.now()
         if current_time - self._last_cache_cleanup > timedelta(hours=1):
             self._last_cache_cleanup = current_time
@@ -83,7 +90,7 @@ class LLMExplainer:
                 del self._response_cache[key]
     
     def _get_cached_response(self, cache_key: str) -> Optional[str]:
-        """Retrieve cached response if available and not expired"""
+        """Retrieve cached response if available and not expired."""
         self._cleanup_cache()
         if cache_key in self._response_cache:
             response, timestamp = self._response_cache[cache_key]
@@ -92,17 +99,19 @@ class LLMExplainer:
         return None
     
     def _calculate_feature_importance(self, applicant_data: Dict) -> Dict[str, float]:
-        """Calculate relative importance of different features"""
-        # This is a simplified example - in practice, you might use SHAP values or other methods
+        """Calculate relative importance of different features."""
         importance = {}
+        numeric_values = [abs(value) for value in applicant_data.values() if isinstance(value, (int, float))]
+        if not numeric_values:
+            return importance
+        total = sum(numeric_values)
         for key, value in applicant_data.items():
             if isinstance(value, (int, float)):
-                importance[key] = abs(value) / sum(abs(v) for v in applicant_data.values() 
-                                                if isinstance(v, (int, float)))
+                importance[key] = abs(value) / total
         return importance
     
     def generate_explanation(self, applicant_data: Dict, risk_score: float, threshold: float, 
-                           context: str, decision: bool) -> Dict[str, Union[str, ExplanationMetrics]]:
+                             context: str, decision: bool) -> Dict[str, Union[str, ExplanationMetrics]]:
         """
         Generate an explanation for a credit decision.
         
@@ -114,7 +123,7 @@ class LLMExplainer:
             decision (bool): Final decision, where a truthy value typically indicates rejection.
         
         Returns:
-            dict: A dictionary containing the explanation and metrics
+            dict: A dictionary containing the explanation and metrics.
         """
         start_time = datetime.now()
         
@@ -158,10 +167,9 @@ class LLMExplainer:
             # Calculate feature importance
             feature_importance = self._calculate_feature_importance(applicant_data)
             
-            # Construct enhanced prompt
+            # Construct enhanced prompt with academic insights
             prompt = f"""
-            You are an expert credit decision explainer. Your task is to provide a clear, fair, and 
-            transparent explanation for a credit decision. Consider the following details:
+            You are an expert credit decision explainer. Your task is to provide a clear, fair, and transparent explanation for a credit decision.
 
             Applicant Information:
             - Loan amount: {key_features['credit_amount']}
@@ -172,7 +180,7 @@ class LLMExplainer:
             - Employment status: {key_features['employment_since']}
 
             Decision Details:
-            - Risk score: {risk_score:.2f} (higher means higher risk)
+            - Risk score: {risk_score:.2f} (higher indicates higher risk)
             - Decision threshold: {threshold:.2f}
             - Economic context: {context}
             - Final Decision: {"REJECTED" if decision else "APPROVED"}
@@ -180,12 +188,18 @@ class LLMExplainer:
             Feature Importance:
             {json.dumps(feature_importance, indent=2)}
 
+            Academic Insights:
+            Based on the findings in "LLMs for Explainable AI: A Comprehensive Survey" (Bilal et al., 2025),
+            please ensure the explanation integrates post-hoc analysis, intrinsic interpretability, and 
+            human-centered narrative approaches. Emphasize clarity, factual accuracy, and logical coherence.
+            Evaluate the explanation along dimensions of comprehensibility, faithfulness, and plausibility.
+
             Please provide a 3-4 sentence explanation that:
-            1. Clearly states the decision
-            2. Explains the key factors that influenced the decision
-            3. Provides context about the economic conditions
-            4. Offers constructive feedback for future applications
-            5. Emphasizes fairness and transparency
+            1. Clearly states the decision.
+            2. Explains the key factors influencing the decision.
+            3. Provides context about the economic conditions.
+            4. Offers constructive feedback for future applications.
+            5. Emphasizes fairness, transparency, and academic rigor.
 
             Format the explanation in a professional, empathetic tone.
             """
@@ -207,7 +221,7 @@ class LLMExplainer:
             metrics = ExplanationMetrics(
                 generation_time=(datetime.now() - start_time).total_seconds(),
                 explanation_length=len(explanation),
-                confidence_score=response.choices[0].finish_reason == "stop",
+                confidence_score=1.0 if response.choices[0].finish_reason == "stop" else 0.0,
                 feature_importance=feature_importance
             )
             
@@ -224,7 +238,7 @@ class LLMExplainer:
             return {'explanation': explanation, 'metrics': metrics}
     
     def generate_rule_based_explanation(self, risk_score: float, threshold: float, 
-                                      context: str, decision: bool) -> str:
+                                        context: str, decision: bool) -> str:
         """
         Generate a rule-based explanation when LLM is unavailable.
         
@@ -251,29 +265,29 @@ class LLMExplainer:
             if risk_score > threshold + 0.1:
                 explanation = (
                     f"Your application has been {decision_text}. {context_phrase} "
-                    f"Your risk score of {risk_score:.2f} was significantly above our current threshold of {threshold:.2f}, "
-                    "indicating a level of risk that exceeds our acceptable limits in this economic climate. "
+                    f"Your risk score of {risk_score:.2f} was significantly above our threshold of {threshold:.2f}, "
+                    "indicating a level of risk that exceeds our acceptable limits. "
                     "We encourage you to review your credit profile and consider reapplying in the future."
                 )
             else:
                 explanation = (
                     f"Your application has been {decision_text}. {context_phrase} "
-                    f"Your risk score of {risk_score:.2f} was slightly above our current threshold of {threshold:.2f}. "
-                    "We encourage you to strengthen your credit profile and reapply in the future. "
+                    f"Your risk score of {risk_score:.2f} was slightly above our threshold of {threshold:.2f}. "
+                    "We recommend strengthening your credit profile and reapplying in the future. "
                     "Consider improving your credit score or providing additional collateral."
                 )
         else:  # Approved case
             if risk_score < threshold - 0.1:
                 explanation = (
                     f"Your application has been {decision_text}! {context_phrase} "
-                    f"Your risk score of {risk_score:.2f} was well below our current threshold of {threshold:.2f}, "
-                    "reflecting a robust credit profile. We're pleased to offer you competitive terms."
+                    f"Your risk score of {risk_score:.2f} was well below our threshold of {threshold:.2f}, "
+                    "reflecting a robust credit profile. We are pleased to offer you competitive terms."
                 )
             else:
                 explanation = (
                     f"Your application has been {decision_text}. {context_phrase} "
-                    f"Your risk score of {risk_score:.2f} was just below our current threshold of {threshold:.2f}. "
-                    "We're able to offer you standard terms based on your credit profile."
+                    f"Your risk score of {risk_score:.2f} was just below our threshold of {threshold:.2f}. "
+                    "We are able to offer you standard terms based on your credit profile."
                 )
                 
         return explanation
