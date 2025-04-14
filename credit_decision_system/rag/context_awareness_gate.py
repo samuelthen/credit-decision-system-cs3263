@@ -71,26 +71,8 @@ class ContextAwarenessGate:
         # Normalize similarity to get a confidence score [0.0, 1.0]
         confidence_score = float(np.clip(avg_top_k, 0.0, 1.0))
 
-        # Print detailed debug output if enabled
-        if self.debug:
-            print(f"[CAG] Query: {query}")
-            print(f"[CAG] Top-{self.top_k} avg similarity: {avg_top_k:.3f} (Threshold: {self.threshold})")
-            print(f"[CAG] Confidence score: {confidence_score:.3f}")
-
         # Base decision: retrieve only if confidence exceeds the defined threshold
         decision = confidence_score > self.threshold
-
-        # Optionally ask the LLM to override the statistical decision
-        if self.use_llm_signal and self.llm_client:
-            llm_decision = self.query_llm_for_signal(query)
-            if llm_decision and not decision:
-                # Boost the confidence to slightly above threshold to force retrieval
-                confidence = self.threshold + 0.05
-                decision = True
-                if self.debug:
-                    print(f"[CAG] LLM override activated. Boosted confidence to {confidence:.3f}")
-            elif self.debug:
-                print(f"[CAG] LLM decision: {llm_decision}")
 
         return decision
 
