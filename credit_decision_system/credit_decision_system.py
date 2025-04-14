@@ -243,7 +243,7 @@ class CreditDecisionSystem:
         
         # 5. Generate explanation
         explanation = self.explainer.generate_explanation(
-            applicant, risk_score, threshold, economic_context, decision)
+            applicant.to_dict(), risk_score, threshold, economic_context, decision)
         
         # 6. Create decision record
         decision_record = {

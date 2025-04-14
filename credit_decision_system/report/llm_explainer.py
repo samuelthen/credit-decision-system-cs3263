@@ -23,11 +23,16 @@ class LLMExplainer:
       - Post-hoc analysis that differentiates local (specific) and global (general) influences.
       - Intrinsic interpretability using Chain of Thought reasoning to detail step-by-step logic.
       - Human-centered narrative instructions that produce explanations in a third-person perspective.
+      
+    Additionally, the module can incorporate regression coefficients for feature importance. When provided, these
+    coefficients are used to weight applicant data, enhancing the explanation by aligning the reported importance
+    with the underlying predictive model's coefficients.
     
     The final explanation is evaluated on clarity, factual accuracy, logical coherence, and robustness.
     """
     
-    def __init__(self, use_llm=True, client=None, NLP_AVAILABLE=True, cache_duration_hours=24):
+    def __init__(self, use_llm=True, client=None, NLP_AVAILABLE=True, cache_duration_hours=24,
+                 regression_coefficients: Optional[Dict[str, float]] = None):
         """
         Initialize the explainer.
         
@@ -36,12 +41,14 @@ class LLMExplainer:
             client: An instance of an LLM API client.
             NLP_AVAILABLE (bool): Whether necessary NLP libraries are available.
             cache_duration_hours (int): Duration in hours for caching responses.
+            regression_coefficients (Optional[Dict[str, float]]): A mapping from feature names to their regression coefficients.
         """
         self.use_llm = use_llm and NLP_AVAILABLE and client is not None
         self.client = client
         self.cache_duration = timedelta(hours=cache_duration_hours)
         self._response_cache = {}
         self._last_cache_cleanup = datetime.now()
+        self.coefficients = regression_coefficients  # New optional parameter
     
     def _validate_inputs(self, applicant_data: Dict, risk_score: float, threshold: float, 
                          context: str, decision: bool) -> None:
@@ -96,8 +103,27 @@ class LLMExplainer:
         return None
     
     def _calculate_feature_importance(self, applicant_data: Dict) -> Dict[str, float]:
-        """Calculate the relative importance of numerical features."""
+        """
+        Calculate the relative importance of different features.
+        
+        If regression coefficients are provided, the importance for each feature is calculated as:
+          importance[f] = |value * coefficient| / (sum_{f in features} |value * coefficient|)
+        Otherwise, a simple normalized absolute value is used.
+        """
         importance = {}
+        # If regression coefficients are provided, use them.
+        if self.coefficients:
+            weighted_values = {}
+            for key, value in applicant_data.items():
+                if isinstance(value, (int, float)) and key in self.coefficients:
+                    weighted_values[key] = abs(value * self.coefficients[key])
+            total = sum(weighted_values.values())
+            if total > 0:
+                for key, val in weighted_values.items():
+                    importance[key] = val / total
+            return importance
+        
+        # Fallback to the original approach if no coefficients provided.
         numeric_values = [abs(value) for value in applicant_data.values() if isinstance(value, (int, float))]
         if not numeric_values:
             return importance
@@ -110,34 +136,35 @@ class LLMExplainer:
     def _chain_of_thought_prompt(self) -> str:
         """
         Generate a Chain-of-Thought (CoT) reasoning prompt segment.
-        This instructs the model to break down its reasoning into logical, sequential steps.
+        
+        Instruct the model to logically outline the sequential steps underlying the decision.
         """
         return (
-            "Using a Chain of Thought approach, first analyze the applicant's credit history, then assess the risk "
-            "score relative to the threshold, and finally consider the current economic context. Explain how each "
-            "step contributes to the final decision."
+            "Using a Chain of Thought approach, first analyze the applicant's credit history, then assess how the risk "
+            "score compares with the threshold, and finally consider the economic context. Explain each step sequentially."
         )
     
     def _posthoc_insight_prompt(self) -> str:
         """
         Generate a post-hoc explanation prompt segment.
-        This instructs the model to highlight both local and global influences based on feature importance.
+        
+        Instruct the model to highlight which features were most influential locally (for this specific decision) and "
+        "how these features generally influence similar credit decisions."
         """
         return (
-            "Provide post-hoc insights by identifying which features had the most influence on this specific decision "
-            "and, in a broader context, how these features typically affect similar credit decisions."
+            "Provide post-hoc insights by identifying key features that most influenced this decision and comment on their general impact."
         )
     
     def _human_centered_prompt(self) -> str:
         """
         Generate a human-centered narrative prompt segment.
-        This instructs the model to provide empathetic feedback in a third-person narrative,
-        including counterfactual suggestions where applicable.
+        
+        Instruct the model to write in a third-person narrative (e.g., 'This applicant ...', 'It is observed that ...')
+        and offer constructive, counterfactual feedback.
         """
         return (
-            "Frame the explanation in third-person perspective. For example, use phrases like 'This applicant' and "
-            "'It is observed that'. Additionally, include constructive feedback such as suggesting how changes in one "
-            "or two key features might lead to a different outcome."
+            "Frame the explanation in third-person narrative. For example, 'This applicant exhibits...' or 'It is observed "
+            "that...'. Also, include constructive feedback suggesting how improvements in certain areas might affect the outcome."
         )
     
     def generate_explanation(self, applicant_data: Dict, risk_score: float, threshold: float, 
@@ -145,13 +172,13 @@ class LLMExplainer:
         """
         Generate an explanation for a credit decision.
         
-        The explanation is designed to be transparent, fair, and human-readable. It incorporates post-hoc analyses,
+        The explanation is designed to be transparent, fair, and human-readable. It incorporates post-hoc analysis, 
         Chain-of-Thought reasoning, and human-centered narratives in a third-person tone.
         
         Args:
             applicant_data (dict): Applicant features (e.g., 'credit_amount', 'duration_months').
-            risk_score (float): Risk score produced by the credit model.
-            threshold (float): Decision threshold.
+            risk_score (float): The risk score produced by the credit model.
+            threshold (float): The decision threshold.
             context (str): Economic context (e.g., "bleak", "neutral", "positive").
             decision (bool): Final decision (True if rejected, False if approved).
         
@@ -173,7 +200,7 @@ class LLMExplainer:
                 )
             }
         
-        # Use rule-based explanation if LLM is not enabled.
+        # Use rule-based explanation if LLM is disabled.
         if not self.use_llm:
             explanation = self.generate_rule_based_explanation(risk_score, threshold, context, decision)
             metrics = ExplanationMetrics(
@@ -222,12 +249,12 @@ class LLMExplainer:
             {self._human_centered_prompt()}
 
             Academic Insights:
-            Based on the research in "LLMs for Explainable AI: A Comprehensive Survey" (Bilal et al., 2025), the explanation 
-            must reflect clarity, factual accuracy, logical coherence, and robustness. It should address both local influences (specific 
-            to this applicant) and global trends across similar cases.
+            Based on "LLMs for Explainable AI: A Comprehensive Survey" (Bilal et al., 2025), the explanation should reflect clarity, 
+            factual accuracy, logical coherence, and robustness. It must address both local influences specific to this applicant and 
+            broader trends across similar cases.
 
-            Provide a 3-4 sentence explanation written in third-person language. For example, "This applicant's credit profile indicates 
-            strong financial stability...", and include constructive feedback on how adjustments to key factors might impact future decisions.
+            Provide a 3-4 sentence explanation in third-person style, such as "This applicant..." and include constructive feedback 
+            on how modifications in key areas might affect future decisions.
             """
             
             response = self.client.chat.completions.create(
@@ -264,7 +291,7 @@ class LLMExplainer:
         """
         Generate a rule-based explanation when the LLM is unavailable.
         
-        The explanation is provided in third-person language.
+        The explanation is provided in third-person narrative.
         
         Args:
             risk_score (float): The applicant's risk score.
@@ -278,8 +305,8 @@ class LLMExplainer:
         decision_text = "approved" if not decision else "declined"
         context_phrases = {
             "bleak": "During the current economic downturn, lending criteria have been tightened.",
-            "neutral": "Based on current economic conditions, standard lending criteria are applied.",
-            "positive": "In a favorable economic climate, competitive lending terms may be offered."
+            "neutral": "Based on current economic conditions, standard lending practices are followed.",
+            "positive": "In a favorable economic climate, competitive lending terms are offered."
         }
         context_phrase = context_phrases.get(context, "Based on current economic conditions,")
         
@@ -288,23 +315,23 @@ class LLMExplainer:
                 explanation = (
                     f"This applicant has been {decision_text} as their risk score of {risk_score:.2f} significantly exceeds the threshold "
                     f"of {threshold:.2f}. {context_phrase} The analysis indicates that the financial profile does not meet the risk criteria, "
-                    "suggesting a need for improvement before reapplication."
+                    "suggesting that improvements in key areas are required before reapplication."
                 )
             else:
                 explanation = (
                     f"This applicant has been {decision_text} since their risk score of {risk_score:.2f} is slightly above the threshold of "
-                    f"{threshold:.2f}. {context_phrase} It is recommended that the applicant works on improving key financial metrics for a more favorable outcome."
+                    f"{threshold:.2f}. {context_phrase} It is recommended that the applicant enhances their financial metrics for a more favorable outcome."
                 )
         else:  # Approved case
             if risk_score < threshold - 0.1:
                 explanation = (
                     f"This applicant has been {decision_text} as their risk score of {risk_score:.2f} is well below the threshold of {threshold:.2f}. "
-                    f"{context_phrase} The robust financial profile indicates strong creditworthiness, suggesting that the applicant meets the criteria for competitive lending terms."
+                    f"{context_phrase} The financial profile indicates strong creditworthiness, thus justifying the competitive lending terms offered."
                 )
             else:
                 explanation = (
-                    f"This applicant has been {decision_text} with a risk score of {risk_score:.2f} that is close to the threshold of {threshold:.2f}. "
-                    f"{context_phrase} While the credit profile is acceptable, there is room for improvement to further optimize the lending decision."
+                    f"This applicant has been {decision_text} with a risk score of {risk_score:.2f} that is near the threshold of {threshold:.2f}. "
+                    f"{context_phrase} Although the credit profile meets the basic criteria, there is an opportunity for enhancement to further optimize the decision."
                 )
                 
         return explanation
